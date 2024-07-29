@@ -92,13 +92,59 @@ app.post('/tambah/:deviceID/:suhu/:lembab', async (req, res) => {
 });
 
 // Read all
-app.get('/items', async (req, res) => {
+app.get('/tambah/:deviceID/:suhu/:lembab', async (req, res) => {
     try {
-        const items = await Item.find();
-        res.status(200).send(items);
-    } catch (err) {
-        res.status(500).send(err);
-    }
+        if (req.params.deviceID) {
+          // let data = {
+          //   suhu: req.params.suhu,
+          //   deviceID: req.params.deviceID,
+          //   lembab: req.params.lembab,
+          //   tanggal: new Date(),
+          // };
+    
+        const data =  await Monitor.create({
+            suhu: req.params.suhu,
+            deviceID: req.params.deviceID,
+            lembab: req.params.lembab,
+            tanggal: new Date(),
+          });
+    
+          // send to message broker
+          // const queue = "monitor";
+          // const conn = await amqplib.connect(
+          //   "amqps://kdtcfyod:eTJ4LSahQETvqpG73HlqcwNmQoTN_jmj@armadillo.rmq.cloudamqp.com/kdtcfyod"
+          // );
+    
+          // Sender
+          // const ch2 = await conn.createChannel();
+          // var json = JSON.stringify(data);
+          // ch2.sendToQueue(queue, Buffer.from(json));
+    
+          res.status(200);
+          res.send({
+            status: true,
+            message: data,
+          });
+          res.end();
+          console.log("transaksi berhasil ke broker");
+        } else {
+          res.status(500);
+          res.send({
+            status: false,
+            message: "data tidak lengkap",
+            error: req.param.deviceID,
+          });
+          res.end();
+        }
+      } catch (error) {
+        res.status(500);
+        res.send({
+          status: false,
+          message: "transaksi gagal",
+          error: error,
+        });
+        res.end();
+      }
 });
 
 // Read one
