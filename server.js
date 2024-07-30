@@ -1,6 +1,7 @@
-const express = require('express');
-const mongoose = require('mongoose');
-const bodyParser = require('body-parser');
+const express = require("express");
+const mongoose = require("mongoose");
+const bodyParser = require("body-parser");
+const amqp = require("amqplib/callback_api");
 
 const app = express();
 const port = 8089;
@@ -9,178 +10,136 @@ const port = 8089;
 app.use(bodyParser.json());
 
 // Connect to MongoDB
-mongoose.connect('mongodb+srv://workdaniarthurwidodo:OjWHN87KEQ7t0K8i@cluster0.kxugpca.mongodb.net/melonku?retryWrites=true&w=majority', {
+mongoose.connect(
+  "mongodb+srv://workdaniarthurwidodo:OjWHN87KEQ7t0K8i@cluster0.kxugpca.mongodb.net/melonku?retryWrites=true&w=majority",
+  {
     useNewUrlParser: true,
-    useUnifiedTopology: true
-});
+    useUnifiedTopology: true,
+  }
+);
+const RABBITMQ_URL = "amqp://user:password@localhost:5672/melon_vhost";
+const QUEUE = "melon_queue";
 
 const db = mongoose.connection;
-db.on('error', console.error.bind(console, 'connection error:'));
-db.once('open', function() {
-    console.log('Connected to MongoDB');
+db.on("error", console.error.bind(console, "connection error:"));
+db.once("open", function () {
+  console.log("Connected to MongoDB");
 });
 
 // Define a simple schema and model
 const MonitorSchema = new mongoose.Schema({
-    deviceID: {type: String, required: true},
-    suhu: {type: Number, required: true},
-    tanggal: {type: Date},
-    lembab: {type: Number, required: true},
-    isAnomali: {type: Boolean, default: false},
-    isView: {type: Boolean, default: false}
-})
+  deviceID: { type: String, required: true },
+  suhu: { type: Number, required: true },
+  tanggal: { type: Date },
+  lembab: { type: Number, required: true },
+  isAnomali: { type: Boolean, default: false },
+  isView: { type: Boolean, default: false },
+});
 
 // User model
-const Monitor = mongoose.model('Monitor', MonitorSchema)
+const Monitor = mongoose.model("Monitor", MonitorSchema);
 
 // CRUD Routes
 
-// Create
-app.post('/tambah/:deviceID/:suhu/:lembab', async (req, res) => {
-    try {
-        if (req.params.deviceID) {
-          // let data = {
-          //   suhu: req.params.suhu,
-          //   deviceID: req.params.deviceID,
-          //   lembab: req.params.lembab,
-          //   tanggal: new Date(),
-          // };
-    
-        const data =  await Monitor.create({
-            suhu: req.params.suhu,
-            deviceID: req.params.deviceID,
-            lembab: req.params.lembab,
-            tanggal: new Date(),
-          });
-    
-          // send to message broker
-          // const queue = "monitor";
-          // const conn = await amqplib.connect(
-          //   "amqps://kdtcfyod:eTJ4LSahQETvqpG73HlqcwNmQoTN_jmj@armadillo.rmq.cloudamqp.com/kdtcfyod"
-          // );
-    
-          // Sender
-          // const ch2 = await conn.createChannel();
-          // var json = JSON.stringify(data);
-          // ch2.sendToQueue(queue, Buffer.from(json));
-    
-          res.status(200);
-          res.send({
-            status: true,
-            message: data,
-          });
-          res.end();
-          console.log("transaksi berhasil ke broker");
-        } else {
-          res.status(500);
-          res.send({
-            status: false,
-            message: "data tidak lengkap",
-            error: req.param.deviceID,
-          });
-          res.end();
-        }
-      } catch (error) {
-        res.status(500);
-        res.send({
-          status: false,
-          message: "transaksi gagal",
-          error: error,
-        });
-        res.end();
+app.get("/tambah/:deviceID/:suhu/:lembab", async (req, res) => {
+  // Connect to RabbitMQ
+  amqp.connect(RABBITMQ_URL, (err, connection) => {
+    if (err) {
+      console.error("Failed to connect to RabbitMQ", err);
+      process.exit(1);
+    }
+
+    console.log("Connected to RabbitMQ");
+
+    // Create a channel
+    connection.createChannel(async (err, channel) => {
+      if (err) {
+        console.error("Failed to create a channel", err);
+        process.exit(1);
       }
-});
 
-// Read all
-app.get('/tambah/:deviceID/:suhu/:lembab', async (req, res) => {
-    try {
-        if (req.params.deviceID) {
-          // let data = {
-          //   suhu: req.params.suhu,
-          //   deviceID: req.params.deviceID,
-          //   lembab: req.params.lembab,
-          //   tanggal: new Date(),
-          // };
-    
-        const data =  await Monitor.create({
-            suhu: req.params.suhu,
-            deviceID: req.params.deviceID,
-            lembab: req.params.lembab,
-            tanggal: new Date(),
-          });
-    
-          // send to message broker
-          // const queue = "monitor";
-          // const conn = await amqplib.connect(
-          //   "amqps://kdtcfyod:eTJ4LSahQETvqpG73HlqcwNmQoTN_jmj@armadillo.rmq.cloudamqp.com/kdtcfyod"
-          // );
-    
-          // Sender
-          // const ch2 = await conn.createChannel();
-          // var json = JSON.stringify(data);
-          // ch2.sendToQueue(queue, Buffer.from(json));
-    
-          res.status(200);
-          res.send({
-            status: true,
-            message: data,
-          });
-          res.end();
-          console.log("transaksi berhasil ke broker");
-        } else {
-          res.status(500);
-          res.send({
-            status: false,
-            message: "data tidak lengkap",
-            error: req.param.deviceID,
-          });
-          res.end();
+      // Ensure the queue exists
+      channel.assertQueue(QUEUE, { durable: true });
+      let body = [
+        {
+          suhu: req.params.suhu,
+          deviceID: req.params.deviceID,
+          lembab: req.params.lembab,
+          tanggal: new Date(),
+        },
+      ];
+
+      //     // Send a message to the queue
+      channel.sendToQueue(QUEUE, Buffer.from(body));
+      console.log(`Sent: ${body}`);
+
+      res.send(`Message sent: ${ JSON.stringify(body)}`);
+      //   });
+
+      // Start consuming messages
+      console.log(`Waiting for messages in ${QUEUE}. To exit press CTRL+C`);
+      channel.consume(QUEUE, (body) => {
+        if (body !== null) {
+          console.log(`Received: ${body}`);
+          // Acknowledge the message
+          channel.ack(body);
         }
-      } catch (error) {
-        res.status(500);
-        res.send({
-          status: false,
-          message: "transaksi gagal",
-          error: error,
-        });
-        res.end();
-      }
-});
+      });
 
-// Read one
-app.get('/items/:id', async (req, res) => {
-    try {
-        const item = await Item.findById(req.params.id);
-        if (!item) return res.status(404).send();
-        res.status(200).send(item);
-    } catch (err) {
-        res.status(500).send(err);
-    }
-});
+      await Monitor.create({
+        suhu: req.params.suhu,
+        deviceID: req.params.deviceID,
+        lembab: req.params.lembab,
+        tanggal: new Date(),
+      });
 
-// Update
-app.put('/items/:id', async (req, res) => {
-    try {
-        const item = await Item.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
-        if (!item) return res.status(404).send();
-        res.status(200).send(item);
-    } catch (err) {
-        res.status(400).send(err);
-    }
-});
+      console.log("transaksi berhasil ke broker");
+    });
+  });
+  //   try {
+  //     if (req.params.deviceID) {
+  //       let body = {
+  //         suhu: req.params.suhu,
+  //         deviceID: req.params.deviceID,
+  //         lembab: req.params.lembab,
+  //         tanggal: new Date(),
+  //       };
 
-// Delete
-app.delete('/items/:id', async (req, res) => {
-    try {
-        const item = await Item.findByIdAndDelete(req.params.id);
-        if (!item) return res.status(404).send();
-        res.status(200).send(item);
-    } catch (err) {
-        res.status(500).send(err);
-    }
+  //       const data = await Monitor.create({
+  //         suhu: req.params.suhu,
+  //         deviceID: req.params.deviceID,
+  //         lembab: req.params.lembab,
+  //         tanggal: new Date(),
+  //       });
+
+  //       res.status(200);
+  //       res.send({
+  //         status: true,
+  //         message: data,
+  //       });
+  //       res.end();
+  //       console.log("transaksi berhasil ke broker");
+  //     } else {
+  //       res.status(500);
+  //       res.send({
+  //         status: false,
+  //         message: "data tidak lengkap",
+  //         error: req.param.deviceID,
+  //       });
+  //       res.end();
+  //     }
+  //   } catch (error) {
+  //     res.status(500);
+  //     res.send({
+  //       status: false,
+  //       message: "transaksi gagal",
+  //       error: error,
+  //     });
+  //     res.end();
+  //   }
 });
 
 // Start server
 app.listen(port, () => {
-    console.log(`Server is running on port ${port}`);
+  console.log(`Server is running on port ${port}`);
 });
